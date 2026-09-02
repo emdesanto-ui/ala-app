@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A.L.A. – Ambiente di Lezione Adattiva</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+body{font-family:system-ui,sans-serif;margin:0;background:#f5f7fb;color:#172033}
+header{background:#111827;color:#fff;padding:22px}main{max-width:900px;margin:auto;padding:18px}
+.card{background:#fff;border:1px solid #dbe2ea;border-radius:14px;padding:18px;margin-bottom:15px}
+input,textarea,button{font:inherit}input,textarea{width:100%;box-sizing:border-box;padding:11px;margin:6px 0 10px;border:1px solid #cbd5e1;border-radius:9px}
+textarea{min-height:110px}button{padding:10px 14px;border:0;border-radius:9px;background:#215cda;color:white;font-weight:700;cursor:pointer;margin-right:8px}
+.secondary{background:#475569}.hidden{display:none}.status{margin-top:10px;padding:10px;border-radius:8px}.ok{background:#ecfdf5;color:#166534}.err{background:#fef2f2;color:#991b1b}.warn{background:#fffbeb;color:#92400e}
+.code{font-size:34px;font-weight:900;letter-spacing:5px}.item{border:1px solid #dbe2ea;border-radius:9px;padding:10px;margin:8px 0}.muted{color:#64748b}.tabs{margin-bottom:15px}
+</style>
+</head>
+<body>
+<header>
+<h1>A.L.A. – Ambiente di Lezione Adattiva</h1>
+<div>INSEGNO → OSSERVO → ANALIZZO → ADATTO → VERIFICO</div>
+</header>
+<main>
+
+<div id="configWarning" class="card warn">
+<strong>Configurazione da completare.</strong>
+<div>Dopo il caricamento su GitHub sostituiremo insieme le due righe SUPABASE_URL e SUPABASE_KEY.</div>
+</div>
+
+<div class="tabs">
+<button id="tabTeacher">DOCENTE</button>
+<button id="tabStudent" class="secondary">STUDENTE</button>
+</div>
+
+<section id="teacher">
+<div id="loginBox" class="card">
+<h2>Accesso docente</h2>
+<label>Email</label><input id="email" type="email">
+<label>Password</label><input id="password" type="password">
+<button id="login">Accedi</button>
+<div id="loginStatus"></div>
+</div>
+
+<div id="dashboard" class="hidden">
+<div class="card">
+<h2>Crea stanza</h2>
+<label>Classe</label><input id="className" placeholder="es. 5A">
+<label>Disciplina</label><input id="subject" placeholder="es. Storia dell'Arte">
+<label>Argomento</label><input id="topic" placeholder="es. Cubismo">
+<button id="createRoom">Crea stanza</button>
+<button id="logout" class="secondary">Esci</button>
+<div id="roomStatus"></div>
+</div>
+
+<div id="roomBox" class="hidden">
+<div class="card">
+<div class="muted">Codice stanza</div>
+<div id="roomCode" class="code">------</div>
+<div id="roomMeta" class="muted"></div>
+<div style="margin-top:10px">Partecipanti: <strong id="participantCount">0</strong></div>
+</div>
+
+<div class="card">
+<h3>Lancia microattività</h3>
+<label>Titolo</label><input id="actTitle" placeholder="es. Osserva e motiva">
+<label>Domanda / consegna</label><textarea id="actQuestion"></textarea>
+<button id="launch">Lancia attività</button>
+<button id="closeAct" class="secondary">Chiudi attività</button>
+<div id="actStatus"></div>
+</div>
+
+<div class="card">
+<h3>Risposte</h3>
+<div id="responses"><div class="muted">Nessuna risposta.</div></div>
+</div>
+</div>
+</div>
+</section>
+
+<section id="student" class="hidden">
+<div id="joinBox" class="card">
+<h2>Entra nella lezione</h2>
+<label>Codice stanza</label><input id="joinCode" maxlength="6" placeholder="ABC234">
+<label>Pseudonimo</label><input id="nickname" maxlength="30" placeholder="es. Stella17">
+<div class="muted">Non inserire dati personali o sensibili.</div>
+<button id="join" style="margin-top:10px">Entra</button>
+<div id="joinStatus"></div>
+</div>
+
+<div id="studentRoom" class="hidden">
+<div class="card">
+<h2 id="studentTitle">Stanza A.L.A.</h2>
+<div id="studentMeta" class="muted"></div>
+</div>
+<div id="waiting" class="card">
+<h3>In attesa dell'attività</h3>
+<div class="muted">La pagina si aggiorna automaticamente.</div>
+</div>
+<div id="studentAct" class="card hidden">
+<h3 id="studentActTitle">Attività</h3>
+<p id="studentQuestion"></p>
+<label>La tua risposta</label><textarea id="answer"></textarea>
+<button id="sendAnswer">Invia risposta</button>
+<div id="answerStatus"></div>
+</div>
+</div>
+</section>
+
+</main>
+<script>
+const SUPABASE_URL = "PASTE_YOUR_SUPABASE_URL_HERE";
+const SUPABASE_KEY = "PASTE_YOUR_PUBLISHABLE_KEY_HERE";
+
+const configured = SUPABASE_URL.startsWith("https://") && SUPABASE_URL.includes("supabase.co") && !SUPABASE_KEY.includes("PASTE_");
+if(configured) document.getElementById("configWarning").classList.add("hidden");
+const sb = configured ? supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+
+let currentRoom=null,currentParticipant=null,currentStudentActivity=null,teacherTimer=null,studentTimer=null;
+const $=id=>document.getElementById(id);
+function setStatus(id,msg,kind="ok"){ $(id).innerHTML=`<div class="status ${kind}">${msg}</div>`; }
+function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));}
+
+$("tabTeacher").onclick=()=>{$("teacher").classList.remove("hidden");$("student").classList.add("hidden")};
+$("tabStudent").onclick=()=>{$("student").classList.remove("hidden");$("teacher").classList.add("hidden")};
+
+async function init(){
+ if(!sb)return;
+ const {data}=await sb.auth.getSession();
+ if(data.session){$("loginBox").classList.add("hidden");$("dashboard").classList.remove("hidden");}
+}
+$("login").onclick=async()=>{
+ if(!sb)return setStatus("loginStatus","Prima completiamo il collegamento a Supabase.","err");
+ const {error}=await sb.auth.signInWithPassword({email:$("email").value.trim(),password:$("password").value});
+ if(error)return setStatus("loginStatus",error.message,"err");
+ $("loginBox").classList.add("hidden");$("dashboard").classList.remove("hidden");
+};
+$("logout").onclick=async()=>{if(sb)await sb.auth.signOut();location.reload();};
+
+$("createRoom").onclick=async()=>{
+ if(!sb)return;
+ const cn=$("className").value.trim();
+ if(!cn)return setStatus("roomStatus","Inserisci la classe.","err");
+ const {data,error}=await sb.rpc("ala_create_room",{p_class_name:cn,p_subject:$("subject").value.trim()||null,p_topic:$("topic").value.trim()||null});
+ if(error)return setStatus("roomStatus",error.message,"err");
+ currentRoom=Array.isArray(data)?data[0]:data;
+ $("roomCode").textContent=currentRoom.code;
+ $("roomMeta").textContent=[currentRoom.class_name,currentRoom.subject,currentRoom.topic].filter(Boolean).join(" · ");
+ $("roomBox").classList.remove("hidden");
+ setStatus("roomStatus","Stanza creata.");
+ startTeacher();
+};
+
+$("launch").onclick=async()=>{
+ if(!currentRoom)return;
+ const q=$("actQuestion").value.trim();
+ if(!q)return setStatus("actStatus","Scrivi la consegna.","err");
+ await sb.from("activities").update({is_active:false}).eq("room_id",currentRoom.id).eq("is_active",true);
+ const {error}=await sb.from("activities").insert({room_id:currentRoom.id,title:$("actTitle").value.trim()||"Microattività",question:q,phase:"initial",is_active:true});
+ if(error)return setStatus("actStatus",error.message,"err");
+ setStatus("actStatus","Attività lanciata.");
+};
+$("closeAct").onclick=async()=>{
+ if(!currentRoom)return;
+ const {error}=await sb.from("activities").update({is_active:false}).eq("room_id",currentRoom.id).eq("is_active",true);
+ if(error)return setStatus("actStatus",error.message,"err");
+ setStatus("actStatus","Attività chiusa.");
+};
+
+async function refreshTeacher(){
+ if(!sb||!currentRoom)return;
+ const {data:parts}=await sb.from("participants").select("id,nickname,joined_at").eq("room_id",currentRoom.id).order("joined_at");
+ $("participantCount").textContent=(parts||[]).length;
+ const {data:acts}=await sb.from("activities").select("id,title,created_at").eq("room_id",currentRoom.id).order("created_at",{ascending:false}).limit(1);
+ if(!acts||!acts[0])return;
+ const {data:res}=await sb.from("responses").select("id,response_text,participant_id,created_at").eq("activity_id",acts[0].id).order("created_at");
+ const names=Object.fromEntries((parts||[]).map(p=>[p.id,p.nickname]));
+ $("responses").innerHTML=(res&&res.length)?res.map(r=>`<div class="item"><strong>${esc(names[r.participant_id]||"Studente")}</strong><div>${esc(r.response_text)}</div></div>`).join(""):'<div class="muted">Nessuna risposta.</div>';
+}
+function startTeacher(){clearInterval(teacherTimer);refreshTeacher();teacherTimer=setInterval(refreshTeacher,3000);}
+
+$("join").onclick=async()=>{
+ if(!sb)return setStatus("joinStatus","App non ancora configurata.","err");
+ const code=$("joinCode").value.trim().toUpperCase(),nick=$("nickname").value.trim();
+ if(code.length!==6||nick.length<2)return setStatus("joinStatus","Controlla codice e pseudonimo.","err");
+ const {data,error}=await sb.rpc("ala_join_room",{p_code:code,p_nickname:nick});
+ if(error)return setStatus("joinStatus",error.message,"err");
+ currentParticipant=Array.isArray(data)?data[0]:data;
+ $("joinBox").classList.add("hidden");$("studentRoom").classList.remove("hidden");
+ $("studentTitle").textContent=`Stanza ${code}`;
+ $("studentMeta").textContent=[currentParticipant.class_name,currentParticipant.subject,currentParticipant.topic].filter(Boolean).join(" · ");
+ startStudent();
+};
+
+async function pollStudent(){
+ if(!sb||!currentParticipant)return;
+ const {data,error}=await sb.rpc("ala_get_activity",{p_participant_id:currentParticipant.participant_id});
+ if(error)return;
+ const a=Array.isArray(data)?data[0]:data;
+ if(!a){currentStudentActivity=null;$("studentAct").classList.add("hidden");$("waiting").classList.remove("hidden");return;}
+ if(!currentStudentActivity||currentStudentActivity.activity_id!==a.activity_id){
+   currentStudentActivity=a;$("waiting").classList.add("hidden");$("studentAct").classList.remove("hidden");
+   $("studentActTitle").textContent=a.title||"Attività";$("studentQuestion").textContent=a.question;$("answer").value="";$("answerStatus").innerHTML="";
+ }
+}
+function startStudent(){clearInterval(studentTimer);pollStudent();studentTimer=setInterval(pollStudent,3000);}
+
+$("sendAnswer").onclick=async()=>{
+ if(!currentParticipant||!currentStudentActivity)return;
+ const txt=$("answer").value.trim();if(!txt)return setStatus("answerStatus","Scrivi una risposta.","err");
+ const {error}=await sb.rpc("ala_submit_response",{p_participant_id:currentParticipant.participant_id,p_activity_id:currentStudentActivity.activity_id,p_response_text:txt});
+ if(error)return setStatus("answerStatus",error.message,"err");
+ setStatus("answerStatus","Risposta inviata.");$("answer").value="";
+};
+
+init();
+</script>
+</body>
+</html>
