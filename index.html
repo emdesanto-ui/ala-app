@@ -108,8 +108,9 @@ textarea{min-height:110px}button{padding:10px 14px;border:0;border-radius:9px;ba
 
 </main>
 <script>
-const SUPABASE_URL = "PASTE_YOUR_SUPABASE_URL_HERE";
-const SUPABASE_KEY = "PASTE_YOUR_PUBLISHABLE_KEY_HERE";
+const SUPABASE_URL = "NEXT_PUBLIC_SUPABASE_URL=https://ckjqzyoeqfrcpvmhyifa.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_ynJhY5223J8RgK6MspPVUA_rGyyzcn3;
+const SUPABASE_KEY = "sb_publishable_ynJhY5223J8RgK6MspPVUA_rGyyzcn3";
 
 const configured = SUPABASE_URL.startsWith("https://") && SUPABASE_URL.includes("supabase.co") && !SUPABASE_KEY.includes("PASTE_");
 if(configured) document.getElementById("configWarning").classList.add("hidden");
