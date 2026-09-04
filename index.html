@@ -12,7 +12,7 @@ header{background:#111827;color:#fff;padding:22px}main{max-width:900px;margin:au
 input,textarea,button{font:inherit}input,textarea{width:100%;box-sizing:border-box;padding:11px;margin:6px 0 10px;border:1px solid #cbd5e1;border-radius:9px}
 textarea{min-height:110px}button{padding:10px 14px;border:0;border-radius:9px;background:#215cda;color:white;font-weight:700;cursor:pointer;margin-right:8px}
 .secondary{background:#475569}.hidden{display:none}.status{margin-top:10px;padding:10px;border-radius:8px}.ok{background:#ecfdf5;color:#166534}.err{background:#fef2f2;color:#991b1b}.warn{background:#fffbeb;color:#92400e}
-.code{font-size:34px;font-weight:900;letter-spacing:5px}.item{border:1px solid #dbe2ea;border-radius:9px;padding:10px;margin:8px 0}.muted{color:#64748b}.tabs{margin-bottom:15px}
+.code{font-size:34px;font-weight:900;letter-spacing:5px}.item{border:1px solid #dbe2ea;border-radius:9px;padding:10px;margin:8px 0}.muted{color:#64748b}.tabs{margin-bottom:15px}.analysis{margin-top:10px;padding:12px;border:1px solid #dbe2ea;border-radius:9px;background:#f8fafc}.analysis h4{margin:8px 0 4px}.analysis p{margin:4px 0 10px;white-space:pre-wrap}
 </style>
 </head>
 <body>
@@ -116,7 +116,14 @@ const configured = SUPABASE_URL.startsWith("https://") && SUPABASE_URL.includes(
 if(configured) document.getElementById("configWarning").classList.add("hidden");
 const sb = configured ? supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
+// Inserire qui l’endpoint Vercel che esegue la correzione IA, ad esempio:
+// const AI_ENDPOINT = "https://nome-progetto.vercel.app/api/analyze";
+const AI_ENDPOINT = "/api/correct";
+
 let currentRoom=null,currentParticipant=null,currentStudentActivity=null,teacherTimer=null,studentTimer=null;
+let teacherAccessToken=null,currentTeacherActivity=null;
+const currentResponses=new Map();
+const adaptationCache=new Map();
 const $=id=>document.getElementById(id);
 function setStatus(id,msg,kind="ok"){ $(id).innerHTML=`<div class="status ${kind}">${msg}</div>`; }
 function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));}
@@ -126,13 +133,17 @@ $("tabStudent").onclick=()=>{$("student").classList.remove("hidden");$("teacher"
 
 async function init(){
  if(!sb)return;
- 
- const { data: { session } } = await sb.auth.getSession(); if(data.session){$("loginBox").classList.add("hidden");$("dashboard").classList.remove("hidden");}
- const accessToken = session?.access_token;}
+ const {data,error}=await sb.auth.getSession();
+ if(error)return;
+ const session=data?.session||null;
+ teacherAccessToken=session?.access_token||null;
+ if(session){$("loginBox").classList.add("hidden");$("dashboard").classList.remove("hidden");}
+}
 $("login").onclick=async()=>{
  if(!sb)return setStatus("loginStatus","Prima completiamo il collegamento a Supabase.","err");
- const {error}=await sb.auth.signInWithPassword({email:$("email").value.trim(),password:$("password").value});
+ const {data,error}=await sb.auth.signInWithPassword({email:$("email").value.trim(),password:$("password").value});
  if(error)return setStatus("loginStatus",error.message,"err");
+ teacherAccessToken=data?.session?.access_token||null;
  $("loginBox").classList.add("hidden");$("dashboard").classList.remove("hidden");
 };
 $("logout").onclick=async()=>{if(sb)await sb.auth.signOut();location.reload();};
@@ -171,13 +182,69 @@ async function refreshTeacher(){
  if(!sb||!currentRoom)return;
  const {data:parts}=await sb.from("participants").select("id,nickname,joined_at").eq("room_id",currentRoom.id).order("joined_at");
  $("participantCount").textContent=(parts||[]).length;
- const {data:acts}=await sb.from("activities").select("id,title,created_at").eq("room_id",currentRoom.id).order("created_at",{ascending:false}).limit(1);
+ const {data:acts}=await sb.from("activities").select("id,title,question,created_at").eq("room_id",currentRoom.id).order("created_at",{ascending:false}).limit(1);
  if(!acts||!acts[0])return;
+ currentTeacherActivity=acts[0];
  const {data:res}=await sb.from("responses").select("id,response_text,participant_id,created_at").eq("activity_id",acts[0].id).order("created_at");
  const names=Object.fromEntries((parts||[]).map(p=>[p.id,p.nickname]));
- $("responses").innerHTML=(res&&res.length)?res.map(r=>`<div class="item"><strong>${esc(names[r.participant_id]||"Studente")}</strong><div>${esc(r.response_text)}</div></div>`).join(""):'<div class="muted">Nessuna risposta.</div>';
+ currentResponses.clear();
+ (res||[]).forEach(r=>currentResponses.set(String(r.id),{...r,nickname:names[r.participant_id]||"Studente"}));
+ $("responses").innerHTML=(res&&res.length)?res.map(r=>`<div class="item"><strong>${esc(names[r.participant_id]||"Studente")}</strong><div>${esc(r.response_text)}</div><div style="margin-top:10px"><button onclick="analyzeResponse('${String(r.id)}')">Analizza e correggi</button></div><div id="analysis-${String(r.id)}"></div></div>`).join(""):'<div class="muted">Nessuna risposta.</div>';
 }
 function startTeacher(){clearInterval(teacherTimer);refreshTeacher();teacherTimer=setInterval(refreshTeacher,3000);}
+
+async function analyzeResponse(responseId){
+ const target=$("analysis-"+responseId);
+ const r=currentResponses.get(String(responseId));
+ if(!target||!r)return;
+ if(!AI_ENDPOINT)return target.innerHTML='<div class="status warn">Manca ancora l’indirizzo dell’API IA di Vercel. Il resto del file è pronto.</div>';
+ if(!teacherAccessToken){
+   const {data}=await sb.auth.getSession();
+   teacherAccessToken=data?.session?.access_token||null;
+ }
+ if(!teacherAccessToken)return target.innerHTML='<div class="status err">Sessione docente non disponibile. Esci e accedi di nuovo.</div>';
+ target.innerHTML='<div class="status warn">Analisi in corso…</div>';
+ try{
+   const resp=await fetch(AI_ENDPOINT,{
+     method:"POST",
+     headers:{"Content-Type":"application/json","Authorization":`Bearer ${teacherAccessToken}`},
+     body:JSON.stringify({
+       question:currentTeacherActivity?.question||"",
+       answer:r.response_text,
+       subject:currentRoom?.subject||"",
+       topic:currentRoom?.topic||"",
+       className:currentRoom?.class_name||""
+     })
+   });
+   const raw=await resp.text();
+   let result;
+   try{result=raw?JSON.parse(raw):{};}catch{result={report:raw};}
+   if(!resp.ok)throw new Error(result?.message||result?.error||`Errore API ${resp.status}`);
+   const correction=result.correction||result.correzione||result.feedback||"Correzione non restituita.";
+   const report=result.report||result.repor||result.teacher_report||result.report_docente||"Report non restituito.";
+   const adaptation=result.adaptation||result.adattamento||result.adaptive_activity||result.attivita_adattata||null;
+   adaptationCache.set(String(responseId),adaptation);
+   target.innerHTML=`<div class="analysis"><h4>Correzione</h4><p>${esc(typeof correction==="string"?correction:JSON.stringify(correction,null,2))}</p><h4>Report docente</h4><p>${esc(typeof report==="string"?report:JSON.stringify(report,null,2))}</p>${adaptation?`<button onclick="createAdaptiveActivity('${String(responseId)}')">Crea attività adattata</button>`:'<div class="muted">L’IA non ha restituito un’attività adattata.</div>'}</div>`;
+ }catch(err){
+   target.innerHTML=`<div class="status err">${esc(err.message||String(err))}</div>`;
+ }
+}
+
+async function createAdaptiveActivity(responseId){
+ if(!currentRoom)return;
+ const target=$("analysis-"+responseId);
+ const a=adaptationCache.get(String(responseId));
+ if(!a)return;
+ const title=(typeof a==="object"&&(a.title||a.titolo))||"Attività di adattamento";
+ const question=typeof a==="string"?a:((a.question||a.domanda||a.consegna||a.activity||a.attivita)||JSON.stringify(a));
+ if(!question)return target.innerHTML+='<div class="status err">L’attività adattata non contiene una consegna utilizzabile.</div>';
+ await sb.from("activities").update({is_active:false}).eq("room_id",currentRoom.id).eq("is_active",true);
+ const {error}=await sb.from("activities").insert({room_id:currentRoom.id,title,question,phase:"adaptive",is_active:true});
+ if(error)return target.innerHTML+=`<div class="status err">${esc(error.message)}</div>`;
+ target.innerHTML+='<div class="status ok">Attività adattata creata e lanciata.</div>';
+ refreshTeacher();
+}
+
 
 $("join").onclick=async()=>{
  if(!sb)return setStatus("joinStatus","App non ancora configurata.","err");
