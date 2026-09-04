@@ -3,6 +3,14 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Metodo non consentito" });
   }
 
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    return res.status(500).json({
+      error: "GEMINI_API_KEY mancante su Vercel"
+    });
+  }
+
   try {
     const {
       question,
@@ -18,84 +26,180 @@ export default async function handler(req, res) {
       });
     }
 
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "gpt-5.6-luna",
-        input: `
+    const prompt = `
 Sei il motore didattico di A.L.A. - Ambiente di Lezione Adattiva.
 
-Classe: ${className}
-Disciplina: ${subject}
-Argomento: ${topic}
+Analizza la risposta di uno studente italiano a una micro-attività.
 
-DOMANDA O CONSEGNA:
+Classe: ${className || "non indicata"}
+Disciplina: ${subject || "non indicata"}
+Argomento: ${topic || "non indicato"}
+
+DOMANDA:
 ${question}
 
 RISPOSTA DELLO STUDENTE:
 ${answer}
 
-Devi produrre esclusivamente JSON valido con questa struttura:
+Devi:
+1. valutare la correttezza della risposta;
+2. individuare gli elementi corretti;
+3. individuare errori o fraintendimenti;
+4. fornire un feedback breve e comprensibile allo studente;
+5. creare un breve report utile al docente;
+6. proporre una nuova attività adattata specificamente agli errori rilevati.
 
-{
-  "correction": {
-    "correct_parts": "",
-    "errors": "",
-    "improvements": "",
-    "corrected_answer": ""
-  },
-  "report": {
-    "level": "",
-    "strengths": "",
-    "difficulties": "",
-    "skills_to_reinforce": "",
-    "teacher_summary": ""
-  },
-  "adaptive_activity": {
-    "title": "",
-    "question": "",
-    "objective": "",
-    "reason": ""
-  }
-}
+Non inserire dati personali.
+Mantieni un tono rispettoso, didattico e chiaro.
+`;
 
-La correzione deve essere concreta e riferita alla risposta reale.
-Il report deve aiutare il docente a capire cosa ha acquisito lo studente e cosa deve consolidare.
-L'attività adattata deve intervenire precisamente sulla difficoltà emersa, senza riproporre semplicemente la stessa domanda.
-`
-      })
-    });
+    const schema = {
+      type: "object",
+      properties: {
+        correction: {
+          type: "object",
+          properties: {
+            level: {
+              type: "string",
+              enum: [
+                "corretta",
+                "parzialmente corretta",
+                "errata"
+              ]
+            },
+            strengths: {
+              type: "array",
+              items: { type: "string" }
+            },
+            errors: {
+              type: "array",
+              items: { type: "string" }
+            },
+            feedback_student: {
+              type: "string"
+            }
+          },
+          required: [
+            "level",
+            "strengths",
+            "errors",
+            "feedback_student"
+          ]
+        },
+
+        report: {
+          type: "object",
+          properties: {
+            summary: {
+              type: "string"
+            },
+            misconceptions: {
+              type: "array",
+              items: { type: "string" }
+            },
+            teacher_action: {
+              type: "string"
+            }
+          },
+          required: [
+            "summary",
+            "misconceptions",
+            "teacher_action"
+          ]
+        },
+
+        adaptive_activity: {
+          type: "object",
+          properties: {
+            title: {
+              type: "string"
+            },
+            question: {
+              type: "string"
+            },
+            objective: {
+              type: "string"
+            }
+          },
+          required: [
+            "title",
+            "question",
+            "objective"
+          ]
+        }
+      },
+
+      required: [
+        "correction",
+        "report",
+        "adaptive_activity"
+      ]
+    };
+
+    const response = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey
+        },
+
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: prompt
+                }
+              ]
+            }
+          ],
+
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: schema
+          }
+        })
+      }
+    );
 
     const data = await response.json();
 
     if (!response.ok) {
       return res.status(response.status).json({
-        error: data?.error?.message || "Errore durante l'analisi"
+        error:
+          data?.error?.message ||
+          "Errore nella chiamata a Gemini"
       });
     }
 
-    const text = data.output_text || "";
+    const text =
+      data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    let result;
+    if (!text) {
+      return res.status(500).json({
+        error: "Gemini non ha restituito una risposta"
+      });
+    }
+
+    let parsed;
 
     try {
-      result = JSON.parse(text);
+      parsed = JSON.parse(text);
     } catch {
       return res.status(500).json({
-        error: "L'IA non ha restituito un report nel formato previsto",
+        error: "La risposta di Gemini non è JSON valido",
         raw: text
       });
     }
 
-    return res.status(200).json(result);
+    return res.status(200).json(parsed);
 
-  } catch (error) {
+  } catch (err) {
     return res.status(500).json({
-      error: "Errore interno durante l'analisi"
+      error: err.message || "Errore interno"
     });
   }
 }
