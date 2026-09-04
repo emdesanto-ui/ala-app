@@ -126,9 +126,9 @@ $("tabStudent").onclick=()=>{$("student").classList.remove("hidden");$("teacher"
 
 async function init(){
  if(!sb)return;
- const { data: { session } } = await sb.auth.getSession(); 
+ 
  const { data: { session } } = await sb.auth.getSession(); if(data.session){$("loginBox").classList.add("hidden");$("dashboard").classList.remove("hidden");}
-}
+ const accessToken = session?.access_token;}
 $("login").onclick=async()=>{
  if(!sb)return setStatus("loginStatus","Prima completiamo il collegamento a Supabase.","err");
  const {error}=await sb.auth.signInWithPassword({email:$("email").value.trim(),password:$("password").value});
